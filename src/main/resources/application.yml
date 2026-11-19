@@ -53,3 +53,6 @@ app:
     retrieval-top-k: ${AI_RETRIEVAL_TOP_K:5}
     max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:2048}
     system-prompt: ${AI_SYSTEM_PROMPT:}
+  storage:
+    pdf-dir: ${APP_STORAGE_PDF_DIR:../crawl-data/output/files}
+    markdown-dir: ${APP_STORAGE_MARKDOWN_DIR:../dut_rag_dataset_processed/raw_markdown}
