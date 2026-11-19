@@ -10,6 +10,8 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.server.ResponseStatusException;
 import vn.udn.dut.it2.config.AiProperties;
 import vn.udn.dut.it2.model.dto.ChatDto;
+import vn.udn.dut.it2.model.entity.Regulation;
+import vn.udn.dut.it2.repository.RegulationRepository;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -31,6 +33,7 @@ public class AiChatService {
     private final AiProperties aiProperties;
     private final RestClient aiRestClient;
     private final ObjectMapper objectMapper;
+    private final RegulationRepository regulationRepository;
 
     public ChatDto.Response processChat(ChatDto.Request request) {
         if ("mock".equalsIgnoreCase(aiProperties.getProvider())) {
@@ -47,6 +50,26 @@ public class AiChatService {
         }
 
         JsonNode retrieval = retrieveContext(request.getMessage());
+        if (retrieval.path("blocked").asBoolean(false)) {
+            String refusal = retrieval.path("refusal_message").asText(
+                    "Xin lỗi, câu hỏi nằm ngoài phạm vi tra cứu quy chế và thủ tục học vụ của Trường ĐHBK – ĐHĐN.");
+            return ChatDto.Response.builder()
+                    .answer(refusal)
+                    .sources(List.of())
+                    .suggestions(DEFAULT_SUGGESTIONS)
+                    .build();
+        }
+
+        String context = retrieval.path("context").asText("");
+        if (retrieval.path("total_found").asInt(0) == 0 || context.isBlank()) {
+            return ChatDto.Response.builder()
+                    .answer("Hiện tại hệ thống chưa tìm thấy điều khoản phù hợp trong kho văn bản pháp quy DUT cho câu hỏi này. "
+                            + "Vui lòng diễn đạt cụ thể hơn hoặc liên hệ Phòng Đào tạo / Phòng Công tác Sinh viên để được hỗ trợ.")
+                    .sources(List.of())
+                    .suggestions(DEFAULT_SUGGESTIONS)
+                    .build();
+        }
+
         return generateAnswer(request, retrieval);
     }
 
@@ -55,6 +78,7 @@ public class AiChatService {
         payload.put("query", message);
         payload.put("topK", aiProperties.getRetrievalTopK());
         payload.put("top_k", aiProperties.getRetrievalTopK());
+        payload.put("check_guardrail", true);
 
         try {
             JsonNode response = aiRestClient.post()
@@ -126,11 +150,32 @@ public class AiChatService {
         }
         if (response.getSources() == null) {
             response.setSources(new ArrayList<>());
+        } else {
+            enrichSourceUrls(response.getSources());
         }
         if (response.getSuggestions() == null) {
             response.setSuggestions(DEFAULT_SUGGESTIONS);
         }
         return response;
+    }
+
+    private void enrichSourceUrls(List<ChatDto.Citation> sources) {
+        for (ChatDto.Citation source : sources) {
+            if (source == null || source.getDocumentNumber() == null || source.getDocumentNumber().isBlank()) {
+                continue;
+            }
+            String existingUrl = source.getPdfUrl();
+            boolean needsEnrich = existingUrl == null
+                    || existingUrl.isBlank()
+                    || existingUrl.contains("example.com")
+                    || (!existingUrl.startsWith("http") && !existingUrl.startsWith("/"));
+            if (needsEnrich) {
+                regulationRepository.findFirstByDocumentNumberIgnoreCase(source.getDocumentNumber().trim())
+                        .map(Regulation::getPdfUrl)
+                        .filter(url -> url != null && !url.isBlank())
+                        .ifPresent(source::setPdfUrl);
+            }
+        }
     }
 
     private Map<String, Object> responseSchema() {
